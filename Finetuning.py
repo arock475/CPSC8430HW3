@@ -5,6 +5,7 @@ import transformers
 from torch.utils.data import DataLoader, Dataset
 from transformers import BertTokenizerFast, default_data_collator, BertForQuestionAnswering
 
+
 class Train_Dataset(Dataset):
     def __init__(self, tokenizer):
         super(Train_Dataset, self).__init__()
@@ -48,7 +49,7 @@ class Train_Dataset(Dataset):
             data_map["context"],
             max_length=256,
             truncation="only_second",
-            stride=150,
+            stride=64,
             return_overflowing_tokens=True,
             return_offsets_mapping=True,
             padding="max_length",
@@ -59,39 +60,35 @@ class Train_Dataset(Dataset):
         answers = data_map["answer"]
         start_positions = []
         end_positions = []
-
+        # get start and end positions of context
         for i, offset in enumerate(offset_mapping):
-            sample_idx = sample_map[i]
-            answer = answers[sample_idx]
+            sample_ids = sample_map[i]
+            answer = answers[sample_ids]
             start_char = answer["answer_start"]
             end_char = answer["answer_start"] + len(answer["text"])
-            sequence_ids = tok_inputs.sequence_ids(i)
+            tok_sequence_ids = tok_inputs.sequence_ids(i)
 
-            # print()
-            # Find the start and end of the context
-            idx = 0
-            while sequence_ids[idx] != 1:
-                idx += 1
-            context_start = idx
-            while sequence_ids[idx] == 1:
-                idx += 1
-            context_end = idx - 1
+            ids = 0
+            while tok_sequence_ids[ids] != 1:
+                ids += 1
+            context_start = ids
+            while tok_sequence_ids[ids] == 1:
+                ids += 1
+            context_end = ids - 1
 
-            # If the answer is not fully inside the context, label is (0, 0)
             if offset[context_start][0] > start_char or offset[context_end][1] < end_char:
                 start_positions.append(0)
                 end_positions.append(0)
             else:
-                # Otherwise it's the start and end token positions
-                idx = context_start
-                while idx <= context_end and offset[idx][0] <= start_char:
-                    idx += 1
-                start_positions.append(idx - 1)
+                ids = context_start
+                while ids <= context_end and offset[ids][0] <= start_char:
+                    ids += 1
+                start_positions.append(ids - 1)
 
-                idx = context_end
-                while idx >= context_start and offset[idx][1] >= end_char:
-                    idx -= 1
-                end_positions.append(idx + 1)
+                ids = context_end
+                while ids >= context_start and offset[ids][1] >= end_char:
+                    ids -= 1
+                end_positions.append(ids + 1)
 
         tok_inputs["start_positions"] = start_positions
         tok_inputs["end_positions"] = end_positions
@@ -108,10 +105,10 @@ def main():
     print('Initializing Training Dataset')
     train_dataset = Train_Dataset(tokenizer)
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=16)
-    optimizer = optim.Adam(parameters, lr=0.0001)
+    optimizer = optim.Adam(parameters, lr=0.000001)
 
     # linear learning rate scheduler
-    epochs = 20
+    epochs = 3
     num_training_steps = epochs * len(train_dataloader)
     scheduler = transformers.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
@@ -138,7 +135,7 @@ def main():
         total_loss = 0
 
     # save model
-    torch.save(model, "{}/{}.h5".format('SavedModel', 'modelFine3_20e'))
+    torch.save(model, "{}/{}.h5".format('SavedModel', 'modelFine7_3e'))
 
 
 if __name__ == "__main__":
