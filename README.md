@@ -21,3 +21,8 @@ or possibly
 python3 .\eval.py
 ```
 Inside of the file ensure to change the model which is being evaluated.
+
+
+Current Best Scores:
+WER: 0.31
+F1: 0.48
