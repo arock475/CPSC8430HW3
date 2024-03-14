@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import BertTokenizerFast, default_data_collator
 import Levenshtein
+from sklearn.metrics import f1_score
 
 
 class test_Dataset(Dataset):
@@ -102,7 +103,7 @@ class test_Dataset(Dataset):
 def calculate_wer(predictions, targets):
     wer_total = 0
     for pred, target in zip(predictions, targets):
-        if pred == "" or target == "" or pred == None or target == None:
+        if pred == "" or target == "" or pred is None or target is None:
             continue
         wer_total += Levenshtein.distance(pred, target) / max(len(pred), len(target))
     return wer_total / len(predictions)
@@ -112,7 +113,7 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
     print('Loading model')
-    model = torch.load("./SavedModel/ModelFine3_20e.h5")
+    model = torch.load("./SavedModel/ModelFine5_3e.h5")
     model = model.to(device)
     parameters = model.parameters()
     print('Initializing Testing Dataset')
@@ -121,6 +122,7 @@ def main():
 
     print("Starting Testing")
     model.eval()
+    f_scores = []
     wer_scores = []
     with torch.no_grad():
         for batch in test_dataloader:
@@ -129,17 +131,14 @@ def main():
             start_positions = batch["start_positions"].to(device)
             end_positions = batch["end_positions"].to(device)
 
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, start_positions=start_positions, end_positions=end_positions)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, start_positions=start_positions,
+                            end_positions=end_positions)
             start_logits = outputs.start_logits
             end_logits = outputs.end_logits
 
             # Get the predicted start and end indices
             start_indices = torch.argmax(start_logits, dim=1)
             end_indices = torch.argmax(end_logits, dim=1)
-
-            # Convert indices to tokens
-            start_tokens = [tokenizer.convert_ids_to_tokens(ids[i].item()) for i, ids in enumerate(input_ids)]
-            end_tokens = [tokenizer.convert_ids_to_tokens(ids[i].item()) for i, ids in enumerate(input_ids)]
 
             # Get predicted answers
             predictions = [tokenizer.decode(input_ids[i][start_indices[i]:end_indices[i] + 1]) for i in
@@ -149,13 +148,18 @@ def main():
             targets = [tokenizer.decode(input_ids[i][start_positions[i]:end_positions[i] + 1]) for i in
                        range(len(input_ids))]
 
+            # calculate F1 Score
+            f_score = f1_score(targets, predictions, average='micro')
+            f_scores.append(f_score)
+
             # Calculate WER
             wer_score = calculate_wer(predictions, targets)
             wer_scores.append(wer_score)
 
         # Calculate overall WER
-        overall_wer = sum(wer_scores) / len(wer_scores)
-        print(f"Overall Word Error Rate (WER): {overall_wer}")
+        overall_f_score = sum(f_scores) / len(f_scores)
+        overall_wer_score = sum(wer_scores) / len(wer_scores)
+        print(f"Overall WER Score: {overall_wer_score}\nOverall F1 Score: {overall_f_score}")
 
 
 if __name__ == "__main__":
