@@ -1,13 +1,14 @@
 import json
 import torch.optim as optim
 import torch
+import transformers
 from torch.utils.data import DataLoader, Dataset
-from transformers import BertTokenizer, BertModel, default_data_collator
+from transformers import BertTokenizerFast, default_data_collator, BertForQuestionAnswering
 
 class Train_Dataset(Dataset):
     def __init__(self, tokenizer):
         super(Train_Dataset, self).__init__()
-        self.data_path = "/Data/spoken_train-v1.1.json"
+        self.data_path = "Data/spoken_train-v1.1.json"
         contexts, questions, answers = self.preprocess_data(self.data_path)
 
         self.examples = {'context': contexts, 'question': questions, 'answer': answers}
@@ -66,7 +67,7 @@ class Train_Dataset(Dataset):
             end_char = answer["answer_start"] + len(answer["text"])
             sequence_ids = tok_inputs.sequence_ids(i)
 
-            print()
+            # print()
             # Find the start and end of the context
             idx = 0
             while sequence_ids[idx] != 1:
@@ -96,30 +97,49 @@ class Train_Dataset(Dataset):
         tok_inputs["end_positions"] = end_positions
         return tok_inputs
 
-def __main__():
+
+def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    tokenizer = BertTokenizer.from_pretrained("google-bert/bert-base-uncased")
-    model = BertModel.from_pretrained("google-bert/bert-base-uncased")
+    tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+    print('Initializing model')
+    model = BertForQuestionAnswering.from_pretrained("google-bert/bert-base-uncased")
+    model = model.to(device)
     parameters = model.parameters()
+    print('Initializing Training Dataset')
     train_dataset = Train_Dataset(tokenizer)
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=16)
     optimizer = optim.Adam(parameters, lr=0.0001)
 
-    epochs = 1
+    # linear learning rate scheduler
+    epochs = 20
+    num_training_steps = epochs * len(train_dataloader)
+    scheduler = transformers.get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
 
+    total_loss = 0
+    print("Starting Training")
     for epoch in range(epochs):
-        print('On ', epoch, '/', epochs)
         model.train()
         for i, batch in enumerate(train_dataloader):
-            contexts, questions, answers = batch
-            questions, answers = questions.to(device), answers.to(device)
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            start_positions = batch["start_positions"].to(device)
+            end_positions = batch["end_positions"].to(device)
 
             optimizer.zero_grad()
-            outputs = model(questions, target_sentences=answers, mode='train', tr_steps=epoch)
-            ground_truths = answers[:, 1:]
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, start_positions=start_positions, end_positions=end_positions)
             loss = outputs.loss
             loss.backward()
             optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+        avg_loss = total_loss / len(train_dataloader)
+        print(epoch + 1, '/', epochs, '  Loss: ', avg_loss)
+        total_loss = 0
 
     # save model
-    torch.save(model, "{}/{}.h5".format('SavedModel', 'modelFine1'))
+    torch.save(model, "{}/{}.h5".format('SavedModel', 'modelFine3_20e'))
+
+
+if __name__ == "__main__":
+    main()

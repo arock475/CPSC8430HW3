@@ -2,13 +2,14 @@ import json
 import torch.optim as optim
 import torch
 from torch.utils.data import DataLoader, Dataset
-from transformers import BertTokenizer, BertModel, default_data_collator
+from transformers import BertTokenizerFast, default_data_collator
+import Levenshtein
 
 
-class Test_Dataset(Dataset):
+class test_Dataset(Dataset):
     def __init__(self, tokenizer):
-        super(Test_Dataset, self).__init__()
-        self.data_path = "/Data/spoken_test-v1.1.json"
+        super(test_Dataset, self).__init__()
+        self.data_path = "Data/spoken_test-v1.1.json"
         contexts, questions, answers = self.preprocess_data(self.data_path)
 
         self.examples = {'context': contexts, 'question': questions, 'answer': answers}
@@ -67,7 +68,7 @@ class Test_Dataset(Dataset):
             end_char = answer["answer_start"] + len(answer["text"])
             sequence_ids = tok_inputs.sequence_ids(i)
 
-            print()
+            # print()
             # Find the start and end of the context
             idx = 0
             while sequence_ids[idx] != 1:
@@ -96,3 +97,66 @@ class Test_Dataset(Dataset):
         tok_inputs["start_positions"] = start_positions
         tok_inputs["end_positions"] = end_positions
         return tok_inputs
+
+
+def calculate_wer(predictions, targets):
+    wer_total = 0
+    for pred, target in zip(predictions, targets):
+        if pred == "" or target == "" or pred == None or target == None:
+            continue
+        wer_total += Levenshtein.distance(pred, target) / max(len(pred), len(target))
+    return wer_total / len(predictions)
+
+
+def main():
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    tokenizer = BertTokenizerFast.from_pretrained("google-bert/bert-base-uncased")
+    print('Loading model')
+    model = torch.load("./SavedModel/ModelFine3_20e.h5")
+    model = model.to(device)
+    parameters = model.parameters()
+    print('Initializing Testing Dataset')
+    test_dataset = test_Dataset(tokenizer)
+    test_dataloader = DataLoader(test_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=16)
+
+    print("Starting Testing")
+    model.eval()
+    wer_scores = []
+    with torch.no_grad():
+        for batch in test_dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            start_positions = batch["start_positions"].to(device)
+            end_positions = batch["end_positions"].to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, start_positions=start_positions, end_positions=end_positions)
+            start_logits = outputs.start_logits
+            end_logits = outputs.end_logits
+
+            # Get the predicted start and end indices
+            start_indices = torch.argmax(start_logits, dim=1)
+            end_indices = torch.argmax(end_logits, dim=1)
+
+            # Convert indices to tokens
+            start_tokens = [tokenizer.convert_ids_to_tokens(ids[i].item()) for i, ids in enumerate(input_ids)]
+            end_tokens = [tokenizer.convert_ids_to_tokens(ids[i].item()) for i, ids in enumerate(input_ids)]
+
+            # Get predicted answers
+            predictions = [tokenizer.decode(input_ids[i][start_indices[i]:end_indices[i] + 1]) for i in
+                           range(len(input_ids))]
+
+            # Get target answers
+            targets = [tokenizer.decode(input_ids[i][start_positions[i]:end_positions[i] + 1]) for i in
+                       range(len(input_ids))]
+
+            # Calculate WER
+            wer_score = calculate_wer(predictions, targets)
+            wer_scores.append(wer_score)
+
+        # Calculate overall WER
+        overall_wer = sum(wer_scores) / len(wer_scores)
+        print(f"Overall Word Error Rate (WER): {overall_wer}")
+
+
+if __name__ == "__main__":
+    main()
